@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from cachou.cli import gather_cache_info, show_summary, show_details
-from cachou.providers import CacheEntry, CacheInfo, CacheProvider
+from cachou.cli import gather_cache_info, show_summary, show_details, _delete_poetry_cache
+from cachou.providers import CacheEntry, CacheInfo, CacheProvider, PoetryCacheProvider
 
 
 class FakeProvider(CacheProvider):
@@ -60,3 +60,11 @@ def test_show_details_unavailable(tmp_path: Path) -> None:
 def test_show_details_empty(tmp_path: Path) -> None:
     info = CacheInfo(name="empty", path=tmp_path, total_size=0, entries=[], available=True)
     show_details(info)
+
+
+def test_delete_poetry_cache_empty(tmp_path: Path) -> None:
+    """_delete_poetry_cache should handle empty/unavailable cache gracefully."""
+    info = CacheInfo(name="poetry", path=tmp_path, total_size=0, available=False)
+    provider = MagicMock(spec=PoetryCacheProvider)
+    # Should not raise
+    _delete_poetry_cache(provider, info)

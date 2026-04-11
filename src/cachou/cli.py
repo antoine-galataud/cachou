@@ -10,7 +10,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from cachou.providers import CacheInfo, CacheProvider, format_size, get_all_providers
+from cachou.providers import CacheInfo, CacheProvider, PoetryCacheProvider, format_size, get_all_providers
 
 console = Console()
 
@@ -34,11 +34,13 @@ def show_banner() -> None:
 
 
 def gather_cache_info(providers: list[CacheProvider]) -> list[tuple[CacheProvider, CacheInfo]]:
-    """Collect cache information from all providers."""
+    """Collect cache information from all providers with a progress spinner."""
     results: list[tuple[CacheProvider, CacheInfo]] = []
-    for provider in providers:
-        info = provider.get_cache_info()
-        results.append((provider, info))
+    with console.status("[bold cyan]Scanning caches…[/bold cyan]", spinner="dots") as status:
+        for provider in providers:
+            status.update(f"[bold cyan]Scanning {provider.name} cache…[/bold cyan]")
+            info = provider.get_cache_info()
+            results.append((provider, info))
     return results
 
 
@@ -92,8 +94,94 @@ def show_details(info: CacheInfo) -> None:
     console.print()
 
 
+def _delete_poetry_cache(provider: PoetryCacheProvider, info: CacheInfo) -> None:
+    """Poetry-specific deletion menu: caches, artifacts, or both."""
+    if not info.available or not info.entries:
+        console.print(f"  [dim]Nothing to remove for {info.name}.[/dim]")
+        return
+
+    cache_entries = [e for e in info.entries if e.tag == "cache"]
+    artifact_entries = [e for e in info.entries if e.tag == "artifact"]
+    other_entries = [e for e in info.entries if e.tag not in ("cache", "artifact")]
+
+    show_details(info)
+
+    options: list[str] = []
+    option_labels: list[str] = []
+    idx = 1
+    if cache_entries:
+        options.append(str(idx))
+        total_cache = sum(e.size for e in cache_entries)
+        option_labels.append(
+            f"  [cyan]{idx}[/cyan] Clear poetry caches ({format_size(total_cache)})"
+        )
+        idx += 1
+    if artifact_entries:
+        options.append(str(idx))
+        total_art = sum(e.size for e in artifact_entries)
+        option_labels.append(
+            f"  [cyan]{idx}[/cyan] Clear poetry artifacts ({format_size(total_art)})"
+        )
+        idx += 1
+    if cache_entries and artifact_entries:
+        options.append(str(idx))
+        option_labels.append(f"  [cyan]{idx}[/cyan] Clear both caches and artifacts")
+        idx += 1
+    if other_entries:
+        options.append(str(idx))
+        total_other = sum(e.size for e in other_entries)
+        option_labels.append(
+            f"  [cyan]{idx}[/cyan] Clear other data ({format_size(total_other)})"
+        )
+        idx += 1
+    options.append("n")
+    option_labels.append("  [cyan]n[/cyan] Cancel")
+
+    for label in option_labels:
+        console.print(label)
+    console.print()
+
+    choice = Prompt.ask("  Select action", choices=options, default="n")
+    if choice == "n":
+        return
+
+    # Map choice back to entry sets
+    entries_to_delete: list = []
+    opt_idx = 1
+    if cache_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = cache_entries
+        opt_idx += 1
+    if artifact_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = artifact_entries
+        opt_idx += 1
+    if cache_entries and artifact_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = cache_entries + artifact_entries
+        opt_idx += 1
+    if other_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = other_entries
+
+    if not entries_to_delete:
+        return
+
+    if not Confirm.ask("  [bold yellow]Confirm deletion?[/bold yellow]", default=False):
+        console.print("  [dim]Cancelled.[/dim]")
+        return
+
+    freed = provider.clear(entries_to_delete)
+    console.print(f"  [bold green]✓ Freed {format_size(freed)}[/bold green]")
+
+
 def delete_single_cache(provider: CacheProvider, info: CacheInfo) -> None:
     """Interactively delete entries from a single cache."""
+    # Use poetry-specific flow when applicable
+    if isinstance(provider, PoetryCacheProvider):
+        _delete_poetry_cache(provider, info)
+        return
+
     if not info.available or not info.entries:
         console.print(f"  [dim]Nothing to remove for {info.name}.[/dim]")
         return

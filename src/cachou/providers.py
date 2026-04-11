@@ -17,6 +17,7 @@ class CacheEntry:
     path: Path
     size: int
     description: str
+    tag: str = ""
 
 
 @dataclass
@@ -218,7 +219,18 @@ class NpmCacheProvider(CacheProvider):
 
 
 class PoetryCacheProvider(CacheProvider):
-    """Manages the Poetry cache."""
+    """Manages the Poetry cache.
+
+    Handles two distinct categories:
+    - **caches**: named package caches discovered via ``poetry cache list``,
+      cleared safely with ``poetry cache clear <name> --all``.
+    - **artifacts**: the ``artifacts`` subdirectory under the cache root,
+      cleared by removing the directory tree.
+
+    The ``virtualenvs`` directory is intentionally excluded.
+    """
+
+    EXCLUDED_DIRS = {"virtualenvs"}
 
     @property
     def name(self) -> str:
@@ -241,16 +253,81 @@ class PoetryCacheProvider(CacheProvider):
         default = Path.home() / ".cache" / "pypoetry"
         return default if default.exists() else None
 
+    def _list_poetry_caches(self) -> list[str]:
+        """Return named caches reported by ``poetry cache list``."""
+        try:
+            result = subprocess.run(
+                ["poetry", "cache", "list"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return [
+                    line.strip()
+                    for line in result.stdout.splitlines()
+                    if line.strip()
+                ]
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return []
+
     def get_cache_info(self) -> CacheInfo:
         cache_dir = self._cache_dir()
         if cache_dir is None or not cache_dir.exists():
             return CacheInfo(name=self.name, path=cache_dir, total_size=0, available=False)
+
         entries: list[CacheEntry] = []
+
+        # Discover named poetry caches and map to on-disk directories
+        named_caches = self._list_poetry_caches()
+        named_cache_dirs: set[str] = set()
+        for cache_name in named_caches:
+            # Poetry stores caches in subdirectories matching the cache name
+            subdir = cache_dir / cache_name
+            if subdir.is_dir():
+                size = get_dir_size(subdir)
+                if size > 0:
+                    entries.append(
+                        CacheEntry(
+                            path=subdir,
+                            size=size,
+                            description=f"poetry cache: {cache_name}",
+                            tag="cache",
+                        )
+                    )
+                named_cache_dirs.add(cache_name)
+
+        # Artifacts directory
+        artifacts_dir = cache_dir / "artifacts"
+        if artifacts_dir.is_dir():
+            size = get_dir_size(artifacts_dir)
+            if size > 0:
+                entries.append(
+                    CacheEntry(
+                        path=artifacts_dir,
+                        size=size,
+                        description="poetry artifacts",
+                        tag="artifact",
+                    )
+                )
+
+        # Any remaining subdirectories that are not named caches, artifacts,
+        # or excluded (virtualenvs)
+        known = named_cache_dirs | self.EXCLUDED_DIRS | {"artifacts"}
         for sub in sorted(cache_dir.iterdir()):
-            if sub.is_dir():
+            if sub.is_dir() and sub.name not in known:
                 size = get_dir_size(sub)
                 if size > 0:
-                    entries.append(CacheEntry(path=sub, size=size, description=f"poetry {sub.name}"))
+                    entries.append(
+                        CacheEntry(
+                            path=sub,
+                            size=size,
+                            description=f"poetry {sub.name}",
+                            tag="other",
+                        )
+                    )
+
         total = sum(e.size for e in entries)
         return CacheInfo(name=self.name, path=cache_dir, total_size=total, entries=entries)
 
@@ -261,12 +338,28 @@ class PoetryCacheProvider(CacheProvider):
         targets = entries if entries is not None else info.entries
         freed = 0
         for entry in targets:
-            if entry.path.exists():
-                freed += entry.size
-                if entry.path.is_dir():
-                    shutil.rmtree(entry.path, ignore_errors=True)
-                else:
-                    entry.path.unlink(missing_ok=True)
+            if entry.tag == "cache":
+                # Use poetry's own command for safe cache clearing
+                cache_name = entry.path.name
+                try:
+                    subprocess.run(
+                        ["poetry", "cache", "clear", cache_name, "--all", "-n"],
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    freed += entry.size
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    # Fallback to manual removal
+                    if entry.path.exists():
+                        freed += entry.size
+                        shutil.rmtree(entry.path, ignore_errors=True)
+            else:
+                if entry.path.exists():
+                    freed += entry.size
+                    if entry.path.is_dir():
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    else:
+                        entry.path.unlink(missing_ok=True)
         return freed
 
 

@@ -70,6 +70,12 @@ def test_cache_entry_fields(tmp_path: Path) -> None:
     entry = CacheEntry(path=tmp_path, size=42, description="test")
     assert entry.size == 42
     assert entry.description == "test"
+    assert entry.tag == ""
+
+
+def test_cache_entry_tag(tmp_path: Path) -> None:
+    entry = CacheEntry(path=tmp_path, size=10, description="tagged", tag="cache")
+    assert entry.tag == "cache"
 
 
 def test_cache_info_defaults(tmp_path: Path) -> None:
@@ -176,15 +182,105 @@ class TestNpmProviderWithCache:
 
 
 class TestPoetryProviderWithCache:
-    def test_discovers_subdirs(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_discovers_caches_and_artifacts(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # Named cache directory (simulates `poetry cache list` returning "PyPI")
+        pypi_cache = tmp_path / "PyPI"
+        pypi_cache.mkdir()
+        (pypi_cache / "pkg.tar.gz").write_bytes(b"a" * 200)
+
+        # Artifacts directory
         artifacts = tmp_path / "artifacts"
         artifacts.mkdir()
-        (artifacts / "pkg.tar.gz").write_bytes(b"a" * 300)
+        (artifacts / "wheel.whl").write_bytes(b"b" * 100)
 
         monkeypatch.setattr(PoetryCacheProvider, "_cache_dir", lambda self: tmp_path)
+        monkeypatch.setattr(PoetryCacheProvider, "_list_poetry_caches", lambda self: ["PyPI"])
         info = PoetryCacheProvider().get_cache_info()
         assert info.available is True
         assert info.total_size == 300
+
+        cache_entries = [e for e in info.entries if e.tag == "cache"]
+        artifact_entries = [e for e in info.entries if e.tag == "artifact"]
+        assert len(cache_entries) == 1
+        assert cache_entries[0].description == "poetry cache: PyPI"
+        assert len(artifact_entries) == 1
+        assert artifact_entries[0].description == "poetry artifacts"
+
+    def test_excludes_virtualenvs(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        venvs = tmp_path / "virtualenvs"
+        venvs.mkdir()
+        (venvs / "env.tar").write_bytes(b"c" * 500)
+
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "pkg.whl").write_bytes(b"d" * 100)
+
+        monkeypatch.setattr(PoetryCacheProvider, "_cache_dir", lambda self: tmp_path)
+        monkeypatch.setattr(PoetryCacheProvider, "_list_poetry_caches", lambda self: [])
+        info = PoetryCacheProvider().get_cache_info()
+        # virtualenvs should be excluded — only artifacts counted
+        assert info.total_size == 100
+        names = [e.description for e in info.entries]
+        assert not any("virtualenvs" in n for n in names)
+
+    def test_clear_cache_uses_poetry_command(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        pypi_cache = tmp_path / "PyPI"
+        pypi_cache.mkdir()
+        (pypi_cache / "pkg.tar.gz").write_bytes(b"a" * 200)
+
+        monkeypatch.setattr(PoetryCacheProvider, "_cache_dir", lambda self: tmp_path)
+        monkeypatch.setattr(PoetryCacheProvider, "_list_poetry_caches", lambda self: ["PyPI"])
+
+        # Track subprocess calls
+        import subprocess as sp
+
+        calls: list[list[str]] = []
+        original_run = sp.run
+
+        def fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            # Simulate success
+            return original_run(["true"], **kwargs)
+
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        provider = PoetryCacheProvider()
+        info = provider.get_cache_info()
+        cache_entries = [e for e in info.entries if e.tag == "cache"]
+        freed = provider.clear(cache_entries)
+        assert freed == 200
+        # Should have called `poetry cache clear PyPI --all -n`
+        assert any(
+            "poetry" in c[0] and "cache" in c and "clear" in c and "PyPI" in c
+            for c in calls
+        )
+
+    def test_clear_artifacts_uses_rmtree(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        (artifacts / "pkg.whl").write_bytes(b"d" * 100)
+
+        monkeypatch.setattr(PoetryCacheProvider, "_cache_dir", lambda self: tmp_path)
+        monkeypatch.setattr(PoetryCacheProvider, "_list_poetry_caches", lambda self: [])
+
+        provider = PoetryCacheProvider()
+        info = provider.get_cache_info()
+        artifact_entries = [e for e in info.entries if e.tag == "artifact"]
+        freed = provider.clear(artifact_entries)
+        assert freed == 100
+        assert not artifacts.exists()
+
+    def test_other_dirs_tagged(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        other = tmp_path / "something"
+        other.mkdir()
+        (other / "data").write_bytes(b"x" * 50)
+
+        monkeypatch.setattr(PoetryCacheProvider, "_cache_dir", lambda self: tmp_path)
+        monkeypatch.setattr(PoetryCacheProvider, "_list_poetry_caches", lambda self: [])
+        info = PoetryCacheProvider().get_cache_info()
+        other_entries = [e for e in info.entries if e.tag == "other"]
+        assert len(other_entries) == 1
+        assert other_entries[0].size == 50
 
 
 class TestPreCommitProviderWithCache:
