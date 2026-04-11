@@ -10,7 +10,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from cachou.providers import CacheInfo, CacheProvider, PoetryCacheProvider, format_size, get_all_providers
+from cachou.providers import CacheEntry, CacheInfo, CacheProvider, PoetryCacheProvider, format_size, get_all_providers
 
 console = Console()
 
@@ -146,7 +146,7 @@ def _delete_poetry_cache(provider: PoetryCacheProvider, info: CacheInfo) -> None
         return
 
     # Map choice back to entry sets
-    entries_to_delete: list = []
+    entries_to_delete: list[CacheEntry] = []
     opt_idx = 1
     if cache_entries:
         if choice == str(opt_idx):

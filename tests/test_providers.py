@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -232,17 +233,15 @@ class TestPoetryProviderWithCache:
         monkeypatch.setattr(PoetryCacheProvider, "_list_poetry_caches", lambda self: ["PyPI"])
 
         # Track subprocess calls
-        import subprocess as sp
-
         calls: list[list[str]] = []
-        original_run = sp.run
+        original_run = subprocess.run
 
         def fake_run(cmd, **kwargs):
             calls.append(list(cmd))
             # Simulate success
             return original_run(["true"], **kwargs)
 
-        monkeypatch.setattr(sp, "run", fake_run)
+        monkeypatch.setattr(subprocess, "run", fake_run)
 
         provider = PoetryCacheProvider()
         info = provider.get_cache_info()
@@ -301,8 +300,6 @@ class TestPreCommitProviderWithCache:
 
         monkeypatch.setattr(PreCommitCacheProvider, "_cache_dir", lambda self: tmp_path)
         # Monkeypatch subprocess to avoid calling real pre-commit
-        import subprocess
-
         monkeypatch.setattr(
             subprocess,
             "run",
