@@ -43,7 +43,7 @@ def test_gather_cache_info(tmp_path: Path) -> None:
     assert results[0][1].name == "fake"
 
 
-def test_show_summary_no_crash(tmp_path: Path, capsys) -> None:
+def test_show_summary_no_crash(tmp_path: Path) -> None:
     """show_summary should print without errors."""
     info = _make_info("test", tmp_path, size=2048, n_entries=1)
     provider = FakeProvider("test", info)
@@ -51,7 +51,7 @@ def test_show_summary_no_crash(tmp_path: Path, capsys) -> None:
     show_summary([(provider, info)])
 
 
-def test_show_details_unavailable(tmp_path: Path, capsys) -> None:
+def test_show_details_unavailable(tmp_path: Path) -> None:
     info = CacheInfo(name="gone", path=tmp_path, total_size=0, available=False)
     # Should not raise
     show_details(info)

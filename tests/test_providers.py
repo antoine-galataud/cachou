@@ -97,7 +97,7 @@ def test_get_all_providers_returns_four() -> None:
 
 
 class TestPipProviderNoCache:
-    def test_unavailable_when_no_dir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_unavailable_when_no_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Point to a nonexistent directory so the provider reports unavailable
         monkeypatch.setattr(
             PipCacheProvider,
