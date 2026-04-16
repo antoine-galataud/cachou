@@ -10,7 +10,15 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from cachou.providers import CacheEntry, CacheInfo, CacheProvider, PoetryCacheProvider, format_size, get_all_providers
+from cachou.providers import (
+    CacheEntry,
+    CacheInfo,
+    CacheProvider,
+    PoetryCacheProvider,
+    SnapCacheProvider,
+    format_size,
+    get_all_providers,
+)
 
 console = Console()
 
@@ -175,11 +183,104 @@ def _delete_poetry_cache(provider: PoetryCacheProvider, info: CacheInfo) -> None
     console.print(f"  [bold green]✓ Freed {format_size(freed)}[/bold green]")
 
 
+def _delete_snap_cache(provider: SnapCacheProvider, info: CacheInfo) -> None:
+    """Snap-specific deletion menu: system cache, user data, disabled snaps, or all."""
+    if not info.available or not info.entries:
+        console.print(f"  [dim]Nothing to remove for {info.name}.[/dim]")
+        return
+
+    cache_entries = [e for e in info.entries if e.tag == "cache"]
+    user_cache_entries = [e for e in info.entries if e.tag == "user_cache"]
+    disabled_entries = [e for e in info.entries if e.tag == "disabled_snap"]
+
+    show_details(info)
+
+    options: list[str] = []
+    option_labels: list[str] = []
+    idx = 1
+    if cache_entries:
+        total_cache = sum(e.size for e in cache_entries)
+        options.append(str(idx))
+        option_labels.append(
+            f"  [cyan]{idx}[/cyan] Clear snap system cache ({format_size(total_cache)}) [bold yellow]requires sudo[/bold yellow]"
+        )
+        idx += 1
+    if user_cache_entries:
+        total_user = sum(e.size for e in user_cache_entries)
+        options.append(str(idx))
+        option_labels.append(
+            f"  [cyan]{idx}[/cyan] Clear snap user data ({format_size(total_user)})"
+        )
+        idx += 1
+    if disabled_entries:
+        total_disabled = sum(e.size for e in disabled_entries)
+        options.append(str(idx))
+        option_labels.append(
+            f"  [cyan]{idx}[/cyan] Remove disabled snap revisions ({format_size(total_disabled)})"
+        )
+        idx += 1
+    has_multiple = sum(bool(g) for g in (cache_entries, user_cache_entries, disabled_entries)) > 1
+    if has_multiple:
+        options.append(str(idx))
+        option_labels.append(f"  [cyan]{idx}[/cyan] Clear all")
+        idx += 1
+    options.append("n")
+    option_labels.append("  [cyan]n[/cyan] Cancel")
+
+    for label in option_labels:
+        console.print(label)
+    console.print()
+
+    choice = Prompt.ask("  Select action", choices=options, default="n")
+    if choice == "n":
+        return
+
+    # Map choice back to entry sets
+    entries_to_delete: list[CacheEntry] = []
+    opt_idx = 1
+    if cache_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = cache_entries
+        opt_idx += 1
+    if user_cache_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = user_cache_entries
+        opt_idx += 1
+    if disabled_entries:
+        if choice == str(opt_idx):
+            entries_to_delete = disabled_entries
+        opt_idx += 1
+    if has_multiple:
+        if choice == str(opt_idx):
+            entries_to_delete = cache_entries + user_cache_entries + disabled_entries
+
+    if not entries_to_delete:
+        return
+
+    sudo_needed = any(e.tag == "cache" for e in entries_to_delete)
+    warning = (
+        "  [bold yellow]Confirm deletion?[/bold yellow]"
+        if not sudo_needed
+        else "  [bold yellow]Confirm deletion? (sudo password will be requested)[/bold yellow]"
+    )
+    if not Confirm.ask(warning, default=False):
+        console.print("  [dim]Cancelled.[/dim]")
+        return
+
+    freed = provider.clear(entries_to_delete)
+    console.print(f"  [bold green]✓ Freed {format_size(freed)}[/bold green]")
+
+
 def delete_single_cache(provider: CacheProvider, info: CacheInfo) -> None:
     """Interactively delete entries from a single cache."""
     # Use poetry-specific flow when applicable
     if isinstance(provider, PoetryCacheProvider):
         _delete_poetry_cache(provider, info)
+        return
+
+    # Use snap-specific flow when applicable
+    if isinstance(provider, SnapCacheProvider):
+        _delete_snap_cache(provider, info)
         return
 
     if not info.available or not info.entries:

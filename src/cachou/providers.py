@@ -363,6 +363,150 @@ class PoetryCacheProvider(CacheProvider):
         return freed
 
 
+class SnapCacheProvider(CacheProvider):
+    """Manages Ubuntu snap cache and disabled snap revisions.
+
+    Handles three distinct categories:
+    - **cache**: the system-level snap download cache at ``/var/lib/snapd/cache``,
+      cleared via ``sudo rm -rf`` (root access is prompted).
+    - **user_cache**: per-user snap data under ``~/snap/``.
+    - **disabled_snap**: old (disabled) snap revisions discovered via
+      ``snap list --all``, removed individually with ``snap remove --revision``.
+    """
+
+    @property
+    def name(self) -> str:
+        return "snap"
+
+    def _snap_cache_dir(self) -> Path:
+        """Return the system-level snap cache directory."""
+        return Path("/var/lib/snapd/cache")
+
+    def _user_snap_dir(self) -> Path:
+        """Return the user-level snap data directory."""
+        return Path.home() / "snap"
+
+    def _list_disabled_snaps(self) -> list[tuple[str, str, str]]:
+        """Return ``(name, version, revision)`` tuples for disabled snap revisions."""
+        try:
+            env = os.environ.copy()
+            env["LANG"] = "en_US.UTF-8"
+            result = subprocess.run(
+                ["snap", "list", "--all"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+            )
+            if result.returncode == 0:
+                disabled: list[tuple[str, str, str]] = []
+                for line in result.stdout.splitlines():
+                    if "disabled" in line.lower():
+                        parts = line.split()
+                        if len(parts) >= 3:
+                            disabled.append((parts[0], parts[1], parts[2]))
+                return disabled
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return []
+
+    def get_cache_info(self) -> CacheInfo:
+        entries: list[CacheEntry] = []
+
+        # System snap cache (/var/lib/snapd/cache)
+        cache_dir = self._snap_cache_dir()
+        if cache_dir.exists():
+            size = get_dir_size(cache_dir)
+            if size > 0:
+                entries.append(
+                    CacheEntry(
+                        path=cache_dir,
+                        size=size,
+                        description="snap system cache (/var/lib/snapd/cache)",
+                        tag="cache",
+                    )
+                )
+
+        # User snap data (~/snap/)
+        user_dir = self._user_snap_dir()
+        if user_dir.exists():
+            size = get_dir_size(user_dir)
+            if size > 0:
+                entries.append(
+                    CacheEntry(
+                        path=user_dir,
+                        size=size,
+                        description="snap user data (~/snap)",
+                        tag="user_cache",
+                    )
+                )
+
+        # Disabled snap revisions
+        for snap_name, version, revision in self._list_disabled_snaps():
+            snap_path = Path("/snap") / snap_name / revision
+            size = get_dir_size(snap_path) if snap_path.exists() else 0
+            entries.append(
+                CacheEntry(
+                    path=snap_path,
+                    size=size,
+                    description=f"disabled snap: {snap_name} {version} (rev {revision})",
+                    tag="disabled_snap",
+                )
+            )
+
+        total = sum(e.size for e in entries)
+        if not entries:
+            return CacheInfo(name=self.name, path=None, total_size=0, available=False)
+
+        return CacheInfo(
+            name=self.name,
+            path=cache_dir if cache_dir.exists() else None,
+            total_size=total,
+            entries=entries,
+        )
+
+    def clear(self, entries: list[CacheEntry] | None = None) -> int:
+        info = self.get_cache_info()
+        if not info.available:
+            return 0
+        targets = entries if entries is not None else info.entries
+        freed = 0
+        for entry in targets:
+            if entry.tag == "disabled_snap":
+                # Remove a specific disabled snap revision
+                snap_name = entry.path.parent.name
+                revision = entry.path.name
+                try:
+                    subprocess.run(
+                        ["snap", "remove", snap_name, f"--revision={revision}"],
+                        capture_output=True,
+                        timeout=60,
+                    )
+                    freed += entry.size
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+            elif entry.tag == "cache":
+                # System cache requires sudo — let the password prompt
+                # pass through to the terminal by not capturing output.
+                try:
+                    subprocess.run(
+                        ["sudo", "rm", "-rf", str(entry.path)],
+                        timeout=60,
+                    )
+                    freed += entry.size
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+            else:
+                # User snap data — regular removal
+                if entry.path.exists():
+                    freed += entry.size
+                    if entry.path.is_dir():
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    else:
+                        entry.path.unlink(missing_ok=True)
+        return freed
+
+
 class PreCommitCacheProvider(CacheProvider):
     """Manages the pre-commit environments cache."""
 
@@ -429,4 +573,5 @@ def get_all_providers() -> list[CacheProvider]:
         NpmCacheProvider(),
         PoetryCacheProvider(),
         PreCommitCacheProvider(),
+        SnapCacheProvider(),
     ]
