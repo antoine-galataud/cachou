@@ -401,10 +401,11 @@ class SnapCacheProvider(CacheProvider):
             if result.returncode == 0:
                 disabled: list[tuple[str, str, str]] = []
                 for line in result.stdout.splitlines():
-                    if "disabled" in line.lower():
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            disabled.append((parts[0], parts[1], parts[2]))
+                    parts = line.split()
+                    # snap list --all columns: Name Version Rev Tracking Publisher Notes
+                    # Check the Notes column (last field) for "disabled"
+                    if len(parts) >= 6 and "disabled" in parts[-1].lower():
+                        disabled.append((parts[0], parts[1], parts[2]))
                 return disabled
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass

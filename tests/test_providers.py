@@ -395,9 +395,7 @@ class TestSnapProviderWithCache:
             entries: list[CacheEntry] = []
             for snap_name, version, revision in self._list_disabled_snaps():
                 snap_path = tmp_path / snap_name / revision
-                from cachou.providers import get_dir_size as _gds
-
-                size = _gds(snap_path) if snap_path.exists() else 0
+                size = get_dir_size(snap_path) if snap_path.exists() else 0
                 entries.append(
                     CacheEntry(
                         path=snap_path,

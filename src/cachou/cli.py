@@ -219,8 +219,8 @@ def _delete_snap_cache(provider: SnapCacheProvider, info: CacheInfo) -> None:
             f"  [cyan]{idx}[/cyan] Remove disabled snap revisions ({format_size(total_disabled)})"
         )
         idx += 1
-    has_multiple = sum(bool(g) for g in (cache_entries, user_cache_entries, disabled_entries)) > 1
-    if has_multiple:
+    has_multiple_categories = sum(bool(g) for g in (cache_entries, user_cache_entries, disabled_entries)) > 1
+    if has_multiple_categories:
         options.append(str(idx))
         option_labels.append(f"  [cyan]{idx}[/cyan] Clear all")
         idx += 1
@@ -250,7 +250,7 @@ def _delete_snap_cache(provider: SnapCacheProvider, info: CacheInfo) -> None:
         if choice == str(opt_idx):
             entries_to_delete = disabled_entries
         opt_idx += 1
-    if has_multiple:
+    if has_multiple_categories:
         if choice == str(opt_idx):
             entries_to_delete = cache_entries + user_cache_entries + disabled_entries
 
