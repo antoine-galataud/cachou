@@ -2,6 +2,10 @@
 
 Interactive CLI for managing development tool caches on Linux.
 
+[![License](https://img.shields.io/pypi/l/cachou.svg)](https://pypi.org/project/cachou/)
+
+[CLI](images/cachou_cli.png)
+
 ## Supported caches
 
 | Provider   | Default cache path          |
