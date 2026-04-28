@@ -2,7 +2,7 @@
 
 Interactive CLI for managing development tool caches on Linux.
 
-[![License](https://img.shields.io/github/license/antoine-galataud/cachou)
+![License](https://img.shields.io/github/license/antoine-galataud/cachou)
 
 ![CLI](images/cachou_cli.png)
 
